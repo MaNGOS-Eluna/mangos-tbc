@@ -31,6 +31,7 @@
 #include "Server/WorldSession.h"
 #include "Log.h"
 #include "Server/DBCStores.h"
+#include "LuaEngine.h"
 
 #include <chrono>
 #include <functional>
@@ -65,6 +66,10 @@ void WorldSocket::SendPacket(const WorldPacket& pct, bool immediate)
     if (IsClosed())
         return;
 
+    //WorldPacket pct = pkt;
+
+    if (!sEluna->OnPacketSend(m_session, pct))
+        return;
     // Dump outgoing packet.
     sLog.outWorldPacketDump(GetRemoteEndpoint().c_str(), pct.GetOpcode(), pct.GetOpcodeName(), pct, false);
 
@@ -188,6 +193,8 @@ bool WorldSocket::ProcessIncomingData()
                     return false;
                 }
 
+                if (!sEluna->OnPacketReceive(m_session, *pct))
+                    return false;
                 return HandleAuthSession(*pct);
 
             case CMSG_PING:
@@ -195,7 +202,7 @@ bool WorldSocket::ProcessIncomingData()
 
             case CMSG_KEEP_ALIVE:
                 DEBUG_LOG("CMSG_KEEP_ALIVE ,size: " SIZEFMTD " ", pct->size());
-
+				//sEluna->OnPacketReceive(m_session, *pct);
                 return true;
 
             default:
@@ -206,6 +213,8 @@ bool WorldSocket::ProcessIncomingData()
                     return false;
                 }
 
+                if (!sEluna->OnPacketReceive(m_session, *pct))
+                    return false;
                 m_session->QueuePacket(std::move(pct));
 
                 return true;

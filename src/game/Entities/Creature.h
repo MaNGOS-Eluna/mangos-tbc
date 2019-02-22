@@ -471,7 +471,7 @@ struct TrainerSpell
 };
 
 typedef std::unordered_map < uint32 /*spellid*/, TrainerSpell > TrainerSpellMap;
-
+typedef std::map<uint32, time_t> CreatureSpellCooldowns;
 struct TrainerSpellData
 {
     TrainerSpellData() : trainerType(0) {}
@@ -592,8 +592,8 @@ class Creature : public Unit
 
         char const* GetSubName() const { return GetCreatureInfo()->SubName; }
 
-        void Update(const uint32 diff) override;  // overwrite Unit::Update
-
+        //void Update(const uint32 diff) override;  // overwrite Unit::Update
+		void Update(const uint32 diff) ;
         virtual void RegenerateAll(uint32 update_diff);
         uint32 GetEquipmentId() const { return m_equipmentId; }
 
@@ -613,6 +613,7 @@ class Creature : public Unit
         void SetCorpseDelay(uint32 delay) { m_corpseDelay = delay; }
         void ReduceCorpseDecayTimer();
         TimePoint GetCorpseDecayTimer() const { return m_corpseExpirationTime; }
+		uint32 GetCorpseDelay() const { return m_corpseDelay; }
         bool IsRacialLeader() const { return GetCreatureInfo()->RacialLeader; }
         bool IsCivilian() const { return (GetCreatureInfo()->ExtraFlags & CREATURE_EXTRA_FLAG_CIVILIAN) != 0; }
         bool IsNoAggroOnSight() const { return (GetCreatureInfo()->ExtraFlags & CREATURE_EXTRA_FLAG_NO_AGGRO_ON_SIGHT) != 0; }
@@ -677,9 +678,16 @@ class Creature : public Unit
 
         // TODO: Research mob shield block values
         uint32 GetShieldBlockValue() const override { return (getLevel() / 2 + uint32(GetStat(STAT_STRENGTH) / 20)); }
+		bool HasCategoryCooldown(uint32 spell_id) const;
+        uint32 GetCreatureSpellCooldownDelay(uint32 spellId) const;
 
         bool HasSpell(uint32 spellID) const override;
-
+		//SpellCooldowns m_spellCooldowns;
+		//bool HasSpellCooldown(uint32 spell_id) const
+		//{
+		//	SpellCooldowns::const_iterator itr = m_spellCooldowns.find(spell_id);
+		//	return itr != m_spellCooldowns.end() && itr->second.end > time(NULL);
+		//}
         bool UpdateEntry(uint32 Entry, const CreatureData* data = nullptr, GameEventCreatureData const* eventData = nullptr, bool preserveHPAndPower = true);
         void ResetEntry();
 
@@ -709,6 +717,8 @@ class Creature : public Unit
         CreatureInfo const* GetCreatureInfo() const { return m_creatureInfo; }
         CreatureDataAddon const* GetCreatureAddon() const;
 
+		CreatureSpellCooldowns m_CreatureSpellCooldowns;
+		CreatureSpellCooldowns m_CreatureCategoryCooldowns;
         static uint32 ChooseDisplayId(const CreatureInfo* cinfo, const CreatureData* data = nullptr, GameEventCreatureData const* eventData = nullptr);
 
         std::string GetAIName() const;
@@ -832,6 +842,9 @@ class Creature : public Unit
         bool hasWeapon(WeaponAttackType type) const override;
         bool hasWeaponForAttack(WeaponAttackType type) const override { return (Unit::hasWeaponForAttack(type) && hasWeapon(type)); }
 
+		void SetDisableReputationGain(bool disable) { DisableReputationGain = disable; }
+		bool IsReputationGainDisabled() { return DisableReputationGain; }
+
         void SetInvisible(bool invisible) { m_isInvisible = invisible; }
         bool IsInvisible() const { return m_isInvisible; }
 
@@ -909,6 +922,7 @@ class Creature : public Unit
         Position m_combatStartPos;                          // after combat contains last position
         Position m_respawnPos;
 
+		bool DisableReputationGain;
         uint32 m_gameEventVendorId;                         // game event creature data vendor id override
 
         std::unique_ptr<UnitAI> m_ai;

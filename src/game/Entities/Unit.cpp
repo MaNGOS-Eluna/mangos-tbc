@@ -47,7 +47,8 @@
 #include "Movement/MoveSpline.h"
 #include "Entities/CreatureLinkingMgr.h"
 #include "Tools/Formulas.h"
-
+#include "LuaEngine.h"
+#include "ElunaEventMgr.h"
 #include <math.h>
 #include <array>
 
@@ -443,6 +444,8 @@ void Unit::Update(const uint32 diff)
     _UpdateAura();
     }else
     m_AurasCheck -= p_time;*/
+
+    elunaEvents->Update(diff);
 
     // WARNING! Order of execution here is important, do not change.
     // Spells must be processed with event system BEFORE they go to _UpdateSpells.
@@ -1002,6 +1005,12 @@ void Unit::Kill(Unit* victim, DamageEffectType damagetype, SpellEntry const* spe
     if (AI())
         AI()->KilledUnit(victim);
 
+        if (Creature* killer = ToCreature())
+        {
+            // used by eluna
+            if (Player* killed = victim->ToPlayer())
+                sEluna->OnPlayerKilledByCreature(killer, killed);
+        }
     // Call AI OwnerKilledUnit (for any current summoned minipet/guardian/protector)
     PetOwnerKilledUnit(victim);
 
@@ -1056,6 +1065,8 @@ void Unit::Kill(Unit* victim, DamageEffectType damagetype, SpellEntry const* spe
                 if (OutdoorPvP* outdoorPvP = sOutdoorPvPMgr.GetScript(playerVictim->GetCachedZoneId()))
                     outdoorPvP->HandlePlayerKill(killer, playerVictim);
             }
+            // used by eluna
+            sEluna->OnPVPKill(killer, playerVictim);
         }
     }
     else                                                // Killed creature
@@ -1265,9 +1276,13 @@ void Unit::JustKilledCreature(Creature* victim, Player* responsiblePlayer)
         mapInstance->OnCreatureDeath(victim);
 
     if (responsiblePlayer)                                  // killedby Player, inform BG
+    {
         if (BattleGround* bg = responsiblePlayer->GetBattleGround())
             bg->HandleKillUnit(victim, responsiblePlayer);
 
+        // used by eluna
+        sEluna->OnCreatureKill(responsiblePlayer, victim);
+    }
     // Notify the outdoor pvp script
     if (OutdoorPvP* outdoorPvP = sOutdoorPvPMgr.GetScript(responsiblePlayer ? responsiblePlayer->GetCachedZoneId() : GetZoneId()))
         outdoorPvP->HandleCreatureDeath(victim);
@@ -6063,7 +6078,162 @@ FactionTemplateEntry const* Unit::GetFactionTemplateEntry() const
     }
     return entry;
 }
+bool Unit::IsHostileTo(Unit const* unit) const
+{
+	// always non-hostile to self
+	if (unit == this)
+	{
+		return false;
+	}
 
+	// always non-hostile to GM in GM mode
+	if (unit->GetTypeId() == TYPEID_PLAYER && ((Player const*)unit)->isGameMaster())
+	{
+		return false;
+	}
+
+	// always hostile to enemy
+	if (getVictim() == unit || unit->getVictim() == this)
+	{
+		return true;
+	}
+
+	// test pet/charm masters instead pers/charmeds
+	Unit const* testerOwner = GetCharmerOrOwner();
+	Unit const* targetOwner = unit->GetCharmerOrOwner();
+
+	// always hostile to owner's enemy
+	if (testerOwner && (testerOwner->getVictim() == unit || unit->getVictim() == testerOwner))
+	{
+		return true;
+	}
+
+	// always hostile to enemy owner
+	if (targetOwner && (getVictim() == targetOwner || targetOwner->getVictim() == this))
+	{
+		return true;
+	}
+
+	// always hostile to owner of owner's enemy
+	if (testerOwner && targetOwner && (testerOwner->getVictim() == targetOwner || targetOwner->getVictim() == testerOwner))
+	{
+		return true;
+	}
+
+	Unit const* tester = testerOwner ? testerOwner : this;
+	Unit const* target = targetOwner ? targetOwner : unit;
+
+	// always non-hostile to target with common owner, or to owner/pet
+	if (tester == target)
+	{
+		return false;
+	}
+
+	// special cases (Duel, etc)
+	if (tester->GetTypeId() == TYPEID_PLAYER && target->GetTypeId() == TYPEID_PLAYER)
+	{
+		Player const* pTester = (Player const*)tester;
+		Player const* pTarget = (Player const*)target;
+
+		// Duel
+		if (pTester->IsInDuelWith(pTarget))
+		{
+			return true;
+		}
+
+		// Group
+		if (pTester->GetGroup() && pTester->GetGroup() == pTarget->GetGroup())
+		{
+			return false;
+		}
+
+		// Sanctuary
+		if (pTarget->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_SANCTUARY) && pTester->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_SANCTUARY))
+		{
+			return false;
+		}
+
+		//// PvP FFA state
+		//if (pTester->IsFFAPvP() && pTarget->IsFFAPvP())
+		//{
+		//	return true;
+		//}
+
+		//= PvP states
+		// Green/Blue (can't attack)
+		if (pTester->GetTeam() == pTarget->GetTeam())
+		{
+			return false;
+		}
+
+		// Red (can attack) if true, Blue/Yellow (can't attack) in another case
+		return pTester->IsPvP() && pTarget->IsPvP();
+	}
+
+	// faction base cases
+	FactionTemplateEntry const* tester_faction = tester->GetFactionTemplateEntry();
+	FactionTemplateEntry const* target_faction = target->GetFactionTemplateEntry();
+	if (!tester_faction || !target_faction)
+	{
+		return false;
+	}
+
+	if (target->isAttackingPlayer() && tester->IsContestedGuard())
+	{
+		return true;
+	}
+
+	// PvC forced reaction and reputation case
+	if (tester->GetTypeId() == TYPEID_PLAYER)
+	{
+		if (target_faction->faction)
+		{
+			// forced reaction
+			if (ReputationRank const* force = ((Player*)tester)->GetReputationMgr().GetForcedRankIfAny(target_faction))
+			{
+				return *force <= REP_HOSTILE;
+			}
+
+			// if faction have reputation then hostile state for tester at 100% dependent from at_war state
+#ifdef CMANGOS
+			if (FactionEntry const* raw_target_faction = sFactionStore.LookupEntry<FactionEntry>(target_faction->faction))
+#else
+			if (FactionEntry const* raw_target_faction = sFactionStore.LookupEntry(target_faction->faction))
+#endif
+				if (FactionState const* factionState = ((Player*)tester)->GetReputationMgr().GetState(raw_target_faction))
+				{
+					return (factionState->Flags & FACTION_FLAG_AT_WAR);
+				}
+		}
+	}
+	// CvP forced reaction and reputation case
+	else if (target->GetTypeId() == TYPEID_PLAYER)
+	{
+		if (tester_faction->faction)
+		{
+			// forced reaction
+			if (ReputationRank const* force = ((Player*)target)->GetReputationMgr().GetForcedRankIfAny(tester_faction))
+			{
+				return *force <= REP_HOSTILE;
+			}
+
+			// apply reputation state
+#ifdef CMANGOS
+			FactionEntry const* raw_tester_faction = sFactionStore.LookupEntry<FactionEntry>(tester_faction->faction);
+#else
+			FactionEntry const* raw_tester_faction = sFactionStore.LookupEntry(tester_faction->faction);
+#endif
+			
+			if (raw_tester_faction && raw_tester_faction->reputationListID >= 0)
+			{
+				return ((Player const*)target)->GetReputationMgr().GetRank(raw_tester_faction) <= REP_HOSTILE;
+			}
+		}
+	}
+
+	// common faction based case (CvC,PvC,CvP)
+	return tester_faction->IsHostileTo(*target_faction);
+}
 bool Unit::IsNeutralToAll() const
 {
     FactionTemplateEntry const* my_faction = GetFactionTemplateEntry();
@@ -6252,7 +6422,21 @@ void Unit::CombatStopWithPets(bool includingCast)
     CombatStop(includingCast);
     CallForAllControlledUnits(CombatStopWithPetsHelper(includingCast), CONTROLLED_PET | CONTROLLED_GUARDIANS | CONTROLLED_CHARM);
 }
+struct IsAttackingPlayerHelper
+{
+	explicit IsAttackingPlayerHelper() {}
+	bool operator()(Unit const* unit) const { return unit->isAttackingPlayer(); }
+};
 
+bool Unit::isAttackingPlayer() const
+{
+	if (hasUnitState(UNIT_STAT_ATTACK_PLAYER))
+	{
+		return true;
+	}
+
+	return CheckAllControlledUnits(IsAttackingPlayerHelper(), CONTROLLED_PET | CONTROLLED_TOTEMS | CONTROLLED_GUARDIANS | CONTROLLED_CHARM);
+}
 void Unit::RemoveAllAttackers()
 {
     while (!m_attackers.empty())
@@ -8074,6 +8258,10 @@ void Unit::SetInCombatState(bool PvP, Unit* enemy)
         if (m_isCreatureLinkingTrigger)
             GetMap()->GetCreatureLinkingHolder()->DoCreatureLinkingEvent(LINKING_EVENT_AGGRO, pCreature, enemy);
     }
+
+    // used by eluna
+    if (GetTypeId() == TYPEID_PLAYER)
+        sEluna->OnPlayerEnterCombat(ToPlayer(), enemy);
 }
 
 void Unit::ClearInCombat()
@@ -8084,7 +8272,34 @@ void Unit::ClearInCombat()
     RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PET_IN_COMBAT);
 
     if (GetTypeId() == TYPEID_PLAYER)
+        sEluna->OnPlayerLeaveCombat(ToPlayer());
         static_cast<Player*>(this)->pvpInfo.inPvPCombat = false;
+}
+bool Unit::IsTargetableForAttack(bool inverseAlive /*=false*/) const
+{
+	if (GetTypeId() == TYPEID_PLAYER && ((Player*)this)->isGameMaster())
+	{
+		return false;
+	}
+
+	if (HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_NOT_SELECTABLE))
+	{
+		return false;
+	}
+
+	// to be removed if unit by any reason enter combat
+	if (HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PLAYER))
+	{
+		return false;
+	}
+
+	// inversealive is needed for some spells which need to be casted at dead targets (aoe)
+	if (isAlive() == inverseAlive)
+	{
+		return false;
+	}
+
+	return IsInWorld() && !hasUnitState(UNIT_STAT_FEIGN_DEATH) && !IsTaxiFlying();
 }
 
 int32 Unit::ModifyHealth(int32 dVal)

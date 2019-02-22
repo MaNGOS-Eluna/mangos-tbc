@@ -16,37 +16,40 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#ifndef DO_POSTGRESQL
+#ifndef MANGOS_AGGRESSORAI_H
+#define MANGOS_AGGRESSORAI_H
 
-#if !defined(QUERYRESULTMYSQL_H)
-#define QUERYRESULTMYSQL_H
+#include "CreatureAI.h"
+#include "Timer.h"
+#include "Entities/ObjectGuid.h"
 
-#include "Common.h"
+class Creature;
 
-#ifdef _WIN32
-#include <WinSock2.h>
-#include <mysql/mysql.h>
-#else
-#include <mysql.h>
-#endif
-
-class QueryResultMysql : public QueryResult
+class AggressorAI : public CreatureAI
 {
+        enum AggressorState
+        {
+            STATE_NORMAL = 1,
+            STATE_LOOK_AT_VICTIM = 2
+        };
+
     public:
-        QueryResultMysql(MYSQL_RES* result, MYSQL_FIELD* fields, uint64 rowCount, uint32 fieldCount);
 
-        ~QueryResultMysql();
+        explicit AggressorAI(Creature* c);
 
-        bool NextRow() override;
+        void MoveInLineOfSight(Unit*) override;
+        void AttackStart(Unit*) override;
+        void EnterEvadeMode() override;
+        bool IsVisible(Unit*) const override;
+        bool IsControllable() const  { return true; }
 
-        //static Field::SimpleDataTypes GetSimpleType(enum_field_types type);
+        void UpdateAI(const uint32) override;
+        static int Permissible(const Creature*);
 
     private:
-		enum Field::DataTypes ConvertNativeType(enum_field_types mysqlType) const;
-
-        void EndQuery();
-
-        MYSQL_RES* mResult;
+        ObjectGuid i_victimGuid;
+        AggressorState i_state;
+        TimeTracker i_tracker;
 };
-#endif
+
 #endif
