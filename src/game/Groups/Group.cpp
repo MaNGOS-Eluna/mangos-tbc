@@ -37,7 +37,7 @@
 
 GroupMemberStatus GetGroupMemberStatus(const Player* member = nullptr)
 {
-    if (!member || !member->GetSession() || (!member->IsInWorld() && !member->IsBeingTeleportedFar()))
+    if (!member || (!member->IsInWorld() && !member->IsBeingTeleportedFar()))
         return MEMBER_STATUS_OFFLINE;
 
     uint8 flags = MEMBER_STATUS_ONLINE;
@@ -62,10 +62,10 @@ GroupMemberStatus GetGroupMemberStatus(const Player* member = nullptr)
 //============== Group ==============================
 //===================================================
 
-Group::Group() : m_Id(0), m_groupType(GROUPTYPE_NORMAL),
+Group::Group() : m_Id(0), m_leaderLastOnline(0), m_groupType(GROUPTYPE_NORMAL),
     m_difficulty(REGULAR_DIFFICULTY),
     m_bgGroup(nullptr), m_lootMethod(FREE_FOR_ALL), m_lootThreshold(ITEM_QUALITY_UNCOMMON),
-    m_subGroupsCounts(nullptr), m_leaderLastOnline(0)
+    m_subGroupsCounts(nullptr)
 {
 }
 
@@ -123,10 +123,10 @@ bool Group::Create(ObjectGuid guid, const char* name)
 
         // store group in database
         CharacterDatabase.BeginTransaction();
-        CharacterDatabase.PExecute("DELETE FROM groups WHERE groupId ='%u'", m_Id);
+        CharacterDatabase.PExecute("DELETE FROM `groups` WHERE groupId ='%u'", m_Id);
         CharacterDatabase.PExecute("DELETE FROM group_member WHERE groupId ='%u'", m_Id);
 
-        CharacterDatabase.PExecute("INSERT INTO groups(groupId,leaderGuid,mainTank,mainAssistant,lootMethod,looterGuid,lootThreshold,icon1,icon2,icon3,icon4,icon5,icon6,icon7,icon8,isRaid,difficulty) "
+        CharacterDatabase.PExecute("INSERT INTO `groups`(groupId,leaderGuid,mainTank,mainAssistant,lootMethod,looterGuid,lootThreshold,icon1,icon2,icon3,icon4,icon5,icon6,icon7,icon8,isRaid,difficulty) "
                                    "VALUES('%u','%u','%u','%u','%u','%u','%u','" UI64FMTD "','" UI64FMTD "','" UI64FMTD "','" UI64FMTD "','" UI64FMTD "','" UI64FMTD "','" UI64FMTD "','" UI64FMTD "','%u','%u')",
                                    m_Id, m_leaderGuid.GetCounter(), m_mainTankGuid.GetCounter(), m_mainAssistantGuid.GetCounter(), uint32(m_lootMethod),
                                    m_masterLooterGuid.GetCounter(), uint32(m_lootThreshold),
@@ -152,7 +152,7 @@ bool Group::Create(ObjectGuid guid, const char* name)
 bool Group::LoadGroupFromDB(Field* fields)
 {
     //                                          0         1              2           3           4              5      6      7      8      9      10     11     12     13      14          15          16
-    // result = CharacterDatabase.Query("SELECT mainTank, mainAssistant, lootMethod, looterGuid, lootThreshold, icon1, icon2, icon3, icon4, icon5, icon6, icon7, icon8, isRaid, difficulty, leaderGuid, groupId FROM groups");
+    // result = CharacterDatabase.Query("SELECT mainTank, mainAssistant, lootMethod, looterGuid, lootThreshold, icon1, icon2, icon3, icon4, icon5, icon6, icon7, icon8, isRaid, difficulty, leaderGuid, groupId FROM `groups`");
 
     m_Id = fields[16].GetUInt32();
     m_leaderGuid = ObjectGuid(HIGHGUID_PLAYER, fields[15].GetUInt32());
@@ -220,7 +220,7 @@ void Group::ConvertToRaid()
     _initRaidSubGroupsCounter();
 
     if (!isBattleGroup())
-        CharacterDatabase.PExecute("UPDATE groups SET isRaid = 1 WHERE groupId='%u'", m_Id);
+        CharacterDatabase.PExecute("UPDATE `groups` SET isRaid = 1 WHERE groupId='%u'", m_Id);
     SendUpdate();
 
     // update quest related GO states (quest activity dependent from raid membership)
@@ -307,6 +307,8 @@ bool Group::AddMember(ObjectGuid guid, const char* name)
 
     if (Player* player = sObjectMgr.GetPlayer(guid))
     {
+        _updateMembersOnRosterChanged(player);
+
         if (!IsLeader(player->GetObjectGuid()) && !isBattleGroup())
         {
             // reset the new member's instances, unless he is currently in one of them
@@ -341,6 +343,8 @@ uint32 Group::RemoveMember(ObjectGuid guid, uint8 method)
     if (player && player->GetPlayerbotMgr())
         player->GetPlayerbotMgr()->RemoveAllBotsFromGroup();
 #endif
+
+    _updateMembersOnRosterChanged(player);
 
     for (GroupReference* itr = GetFirstMember(); itr != nullptr; itr = itr->next())
     {
@@ -481,7 +485,7 @@ void Group::Disband(bool hideDestroy)
     if (!isBattleGroup())
     {
         CharacterDatabase.BeginTransaction();
-        CharacterDatabase.PExecute("DELETE FROM groups WHERE groupId='%u'", m_Id);
+        CharacterDatabase.PExecute("DELETE FROM `groups` WHERE groupId='%u'", m_Id);
         CharacterDatabase.PExecute("DELETE FROM group_member WHERE groupId='%u'", m_Id);
         CharacterDatabase.CommitTransaction();
         ResetInstances(INSTANCE_RESET_GROUP_DISBAND, nullptr);
@@ -574,17 +578,24 @@ void Group::SendTargetIconList(WorldSession* session) const
     session->SendPacket(data);
 }
 
-void Group::SendUpdate()
+void Group::SendUpdateTo(Player* player)
 {
-    for (member_citerator citr = m_memberSlots.begin(); citr != m_memberSlots.end(); ++citr)
+    if (player && player->GetGroup() == this)
     {
-        Player* player = sObjectMgr.GetPlayer(citr->guid);
-        if (!player || !player->GetSession() || player->GetGroup() != this)
-            continue;
+        WorldSession* session = player->GetSession();
+
+        if (!session)
+            return;
+
+        member_citerator citr = _getMemberCSlot(player->GetObjectGuid());
+
+        if (citr == m_memberSlots.end())
+            return;
+
         // guess size
         WorldPacket data(SMSG_GROUP_LIST, (1 + 1 + 1 + 1 + 8 + 4 + GetMembersCount() * 20));
         data << uint8(m_groupType);                         // group type
-        data << uint8(isBattleGroup() ? 1 : 0);                 // 2.0.x, isBattleGroundGroup?
+        data << uint8(isBattleGroup() ? 1 : 0);             // 2.0.x, isBattleGroundGroup?
         data << uint8(citr->group);                         // groupid
         data << uint8(GetFlags(*citr));                     // group flags
         data << GetObjectGuid();                            // group guid
@@ -609,8 +620,15 @@ void Group::SendUpdate()
             data << uint8(m_lootThreshold);                 // loot threshold
             data << uint8(m_difficulty);                    // Heroic Mod Group
         }
-        player->GetSession()->SendPacket(data);
+
+        session->SendPacket(data);
     }
+}
+
+void Group::SendUpdate()
+{
+    for (member_citerator citr = m_memberSlots.begin(); citr != m_memberSlots.end(); ++citr)
+        SendUpdateTo(sObjectMgr.GetPlayer(citr->guid));
 }
 
 void Group::UpdatePlayerOutOfRange(Player* pPlayer)
@@ -638,7 +656,6 @@ void Group::UpdatePlayerOnlineStatus(Player* player, bool online /*= true*/)
     if (!IsMember(guid))
         return;
 
-    SendUpdate();
     if (online)
     {
         player->SetGroupUpdateFlag(GROUP_UPDATE_FULL);
@@ -936,7 +953,7 @@ void Group::_setLeader(ObjectGuid guid)
         Player::ConvertInstancesToGroup(player, this, slot->guid);
 
         // update the group leader
-        CharacterDatabase.PExecute("UPDATE groups SET leaderGuid='%u' WHERE groupId='%u'", slot_lowguid, m_Id);
+        CharacterDatabase.PExecute("UPDATE `groups` SET leaderGuid='%u' WHERE groupId='%u'", slot_lowguid, m_Id);
         CharacterDatabase.CommitTransaction();
     }
 
@@ -951,6 +968,57 @@ void Group::_updateLeaderFlag(bool remove /*= false*/) const
 {
     if (Player* player = sObjectMgr.GetPlayer(m_leaderGuid))
         player->UpdateGroupLeaderFlag(remove);
+}
+
+void Group::_updateMembersOnRosterChanged(Player* changed)
+{
+    if (!changed || !changed->IsInWorld())
+        return;
+
+    // Fog of War: setting implies health obfuscation outside of groups, force update
+    const bool fow = (sWorld.getConfig(CONFIG_UINT32_FOGOFWAR_HEALTH) == 0);
+    // [XFACTION]: Prepare to alter fields if detected crossfaction group interaction
+    const bool xfaction = sWorld.getConfig(CONFIG_BOOL_ALLOW_TWO_SIDE_INTERACTION_GROUP);
+
+    if (!fow && !xfaction)
+        return;
+
+    auto update = [&fow, &xfaction] (Unit* pov, Unit* target)
+    {
+        if (fow)
+        {
+            auto forcehp = [] (Unit* u) { u->ForceValuesUpdateAtIndex(UNIT_FIELD_HEALTH); u->ForceValuesUpdateAtIndex(UNIT_FIELD_MAXHEALTH); };
+            forcehp(target);
+            target->CallForAllControlledUnits(forcehp, (CONTROLLED_MINIPET | CONTROLLED_PET | CONTROLLED_TOTEMS | CONTROLLED_GUARDIANS | CONTROLLED_CHARM));
+        }
+
+        // [XFACTION]: Prepare to alter object fields if detected crossfaction group interaction:
+        if (xfaction && !pov->CanCooperate(target))
+        {
+            target->ForceValuesUpdateAtIndex(UNIT_FIELD_FACTIONTEMPLATE);
+
+            if (target->GetTypeId() == TYPEID_PLAYER)
+            {
+                if (Corpse* corpse = static_cast<Player*>(target)->GetCorpse())
+                    corpse->ForceValuesUpdateAtIndex(CORPSE_FIELD_BYTES_1);
+            }
+        }
+    };
+
+    for (GroupReference* itr = GetFirstMember(); itr != nullptr; itr = itr->next())
+    {
+        if (Player* member = itr->getSource())
+        {
+            if (member != changed && member->IsInWorld())
+            {
+                if (member->HaveAtClient(changed))
+                    update(member, changed);
+
+                if (changed->HaveAtClient(member))
+                    update(changed, member);
+            }
+        }
+    }
 }
 
 bool Group::_setMembersGroup(ObjectGuid guid, uint8 group)
@@ -999,7 +1067,7 @@ bool Group::_setMainTank(ObjectGuid guid)
     m_mainTankGuid = guid;
 
     if (!isBattleGroup())
-        CharacterDatabase.PExecute("UPDATE groups SET mainTank='%u' WHERE groupId='%u'", m_mainTankGuid.GetCounter(), m_Id);
+        CharacterDatabase.PExecute("UPDATE `groups` SET mainTank='%u' WHERE groupId='%u'", m_mainTankGuid.GetCounter(), m_Id);
 
     return true;
 }
@@ -1022,7 +1090,7 @@ bool Group::_setMainAssistant(ObjectGuid guid)
     m_mainAssistantGuid = guid;
 
     if (!isBattleGroup())
-        CharacterDatabase.PExecute("UPDATE groups SET mainAssistant='%u' WHERE groupId='%u'",
+        CharacterDatabase.PExecute("UPDATE `groups` SET mainAssistant='%u' WHERE groupId='%u'",
                                    m_mainAssistantGuid.GetCounter(), m_Id);
 
     return true;
@@ -1140,7 +1208,7 @@ void Group::SetDifficulty(Difficulty difficulty)
 {
     m_difficulty = difficulty;
     if (!isBattleGroup())
-        CharacterDatabase.PExecute("UPDATE groups SET difficulty = %u WHERE groupId='%u'", m_difficulty, m_Id);
+        CharacterDatabase.PExecute("UPDATE `groups` SET difficulty = %u WHERE groupId='%u'", m_difficulty, m_Id);
 
     for (GroupReference* itr = GetFirstMember(); itr != nullptr; itr = itr->next())
     {
@@ -1364,7 +1432,6 @@ static void RewardGroupAtKill_helper(Player* pGroupGuy, Unit* pVictim, uint32 co
         pGroupGuy->RewardHonor(pVictim, count);
 
     // xp and reputation only in !PvP case
-    // xp and reputation only in !PvP case
     if (!PvP)
     {
         if (pVictim->GetTypeId() == TYPEID_UNIT)
@@ -1374,20 +1441,21 @@ static void RewardGroupAtKill_helper(Player* pGroupGuy, Unit* pVictim, uint32 co
 
             // if is in dungeon then all receive full reputation at kill
             // rewarded any alive/dead/near_corpse group member
-            pGroupGuy->RewardReputation(creatureVictim, is_dungeon ? 1.0f : rate);
+            pGroupGuy->RewardReputation(creatureVictim, is_dungeon ? 1.0f : 1.0f / count);
 
             // XP updated only for alive group member
             if (pGroupGuy->isAlive() && not_gray_member_with_max_level &&
                 pGroupGuy->getLevel() <= not_gray_member_with_max_level->getLevel())
             {
-                uint32 itr_xp = (member_with_max_level == not_gray_member_with_max_level) ? uint32(xp * rate) : uint32((xp * rate / 2) + 1);
+                float itr_xp = (member_with_max_level == not_gray_member_with_max_level) ? xp * rate : (xp * rate * 0.5f) + 1.0f;
 
-                pGroupGuy->GiveXP(itr_xp, creatureVictim, group_rate);
+                pGroupGuy->GiveXP((uint32)(std::round(itr_xp)), creatureVictim, group_rate);
                 if (Pet* pet = pGroupGuy->GetPet())
-                    // TODO: Pets need to get exp based on their level diff to the target, not the owners.
-                    // the whole RewardGroupAtKill needs a rewrite to match up with this anyways:
-                    // http://wowwiki.wikia.com/wiki/Formulas:Mob_XP?oldid=228414
-                    pet->GivePetXP(itr_xp);
+                {
+                    uint32 pet_xp = MaNGOS::XP::Gain(pet, creatureVictim);
+                    itr_xp = (member_with_max_level == not_gray_member_with_max_level) ? pet_xp * rate : (pet_xp * rate * 0.5f) + 1.0f;
+                    pet->GivePetXP((uint32)(std::round(itr_xp * rate)));
+                }
             }
 
             // quest objectives updated only for alive group member or dead but with not released body

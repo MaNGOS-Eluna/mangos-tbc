@@ -267,6 +267,7 @@ struct npc_kiljaeden_controllerAI : public Scripted_NoMovementAI, private Dialog
                     pRiftwalker->GetMotionMaster()->MovePoint(1, 1738.84f, 627.32f, 28.26f);
                     m_secondRiftwalkerGuid = pRiftwalker->GetObjectGuid();
                 }
+                break;
             case NPC_INERT_PORTAL:
                 // ToDo: summon soldiers to the right
                 m_creature->SummonCreature(NPC_INERT_PORTAL, aOutroLocations[0].m_fX, aOutroLocations[0].m_fY, aOutroLocations[0].m_fZ, aOutroLocations[0].m_fO, TEMPSPAWN_CORPSE_DESPAWN, 0);
@@ -493,7 +494,7 @@ struct boss_kiljaedenAI : public Scripted_NoMovementAI, private DialogueHelper
             if (fAng > 2 * M_PI_F)
                 fAng = fAng - 2 * M_PI_F;
 
-            m_creature->GetNearPoint2D(fX, fY, 25.0f, fAng);
+            m_creature->GetNearPoint2d(fX, fY, 25.0f, fAng);
 
             // Move to new position
             pSummoned->GetMotionMaster()->Clear();
@@ -707,7 +708,7 @@ struct boss_kiljaedenAI : public Scripted_NoMovementAI, private DialogueHelper
                     {
                         // Get some random coords for the Orb
                         float fX, fY;
-                        m_creature->GetNearPoint2D(fX, fY, 25.0f, frand(0, 2 * M_PI_F));
+                        m_creature->GetNearPoint2d(fX, fY, 25.0f, frand(0, 2 * M_PI_F));
                         float fZ = frand(35.0f, 45.0f);
 
                         m_creature->SummonCreature(NPC_SHIELD_ORB, fX, fY, fZ, 0, TEMPSPAWN_CORPSE_DESPAWN, 0);
@@ -781,7 +782,7 @@ struct npc_shield_orbAI : public ScriptedAI
             if (fAng > 2 * M_PI_F)
                 fAng = fAng - 2 * M_PI_F;
 
-            pSummoner->GetNearPoint2D(fX, fY, 25.0f, fAng);
+            pSummoner->GetNearPoint2d(fX, fY, 25.0f, fAng);
 
             // Move to new position
             m_creature->GetMotionMaster()->Clear();

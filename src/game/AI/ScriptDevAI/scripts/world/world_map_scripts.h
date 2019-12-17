@@ -30,6 +30,10 @@ enum
     NPC_IRESPEAKER              = 24999,
     NPC_UNLEASHED_HELLION       = 25002,
 
+    // Quest 10594 - Gauging the Resonant Frequency
+    NPC_WYRM_FROM_BEYOND = 21796,
+    NPC_OSCILLATING_FREQUENCY_SCANNER_BUNNY = 21760,
+
     // Quest 10998
     NPC_VIMGOL_VISUAL_BUNNY     = 23040,
 
@@ -52,8 +56,6 @@ enum
     NPC_SQUIBBY_OVERSPECK       = 12137,
 
     // Quest 8868
-    TYPE_OMEN                   = 0,
-    MAX_ENCOUNTER               = 1,
     NPC_MINION_OMEN             = 15466,
     NPC_OMEN                    = 15467,
     GO_ROCKET_CLUSTER           = 180875,
@@ -78,6 +80,29 @@ enum
     TYPE_DEATHS_DOOR_NORTH      = 0,
     TYPE_DEATHS_DOOR_SOUTH      = 1,
     TYPE_SHARTUUL               = 2,
+
+    // Quest 1126
+    NPC_HIVE_ASHI_DRONES        = 13136,
+
+    // Bashir
+    SPELL_SPIRIT_SPAWN_IN       = 17321,
+    SPELL_ETHEREAL_TELEPORT     = 34427,
+    MOUNT_NETHER_RAY_DISPLAY_ID = 21156,
+
+    // Ogri'la Four Dragons
+    NPC_OBSIDIA = 23282,
+    NPC_RIVENDARK = 23061,
+    NPC_FURYWING = 23261,
+    NPC_INSIDION = 23281,
+};
+
+enum Encounters
+{
+    TYPE_OMEN   = 0, // Quest 8868
+    TYPE_HIVE   = 1,
+    TYPE_TETHYR = 2, // Quest 11198
+    TYPE_BASHIR = 3,
+    MAX_ENCOUNTER
 };
 
 enum ElementalInvasionIndexes
@@ -98,7 +123,9 @@ enum SpawnIndexes
     POS_IDX_OMEN_MOVE           = 4,
     POS_IDX_MINION_OMEN_START   = 5,
     POS_IDX_MINION_OMEN_STOP    = 11,
-    POS_IDX_MAX                 = 12
+    POS_IDX_HIVE_DRONES_START   = 12,
+    POS_IDX_HIVE_DRONES_STOP    = 14,
+    POS_IDX_MAX                 = 15
 };
 
 static const float aSpawnLocations[POS_IDX_MAX][4] =
@@ -115,6 +142,9 @@ static const float aSpawnLocations[POS_IDX_MAX][4] =
     {7477.750f,  -2849.020f,  464.466f, 0.14f},
     {7507.560f,  -2818.230f,  459.486f, 4.63f},
     {7558.880f,  -2856.770f,  457.684f, 4.31f},
+    {-7185.94f,     443.29f,  26.59f, 4.8458f},         // Hive'Ashi Drones spawn 1, guesswork
+    {-7180.59f,     441.33f,  26.68f, 4.1798f},         // Hive'Ashi Drones spawn 2, guesswork
+    {-7176.63f,     437.42f,  26.84f, 3.9348f}          // Hive'Ashi Drones spawn 3, guesswork
 };
 
 #endif

@@ -398,6 +398,7 @@ enum ConditionType
     CONDITION_PVP_SCRIPT            = 38,                   // value1: zoneId; value2: conditionId (usually hardcoded in the script);
     CONDITION_SPAWN_COUNT           = 39,                   // value1: creatureId; value2: count;
     CONDITION_WORLD_SCRIPT          = 40,
+    CONDITION_GENDER_NPC            = 41,                   // value1: creature model gender: 0=male, 1=female, 2=none (see enum Gender)
 };
 
 enum ConditionSource                                        // From where was the condition called?
@@ -465,7 +466,7 @@ SkillRangeType GetSkillRangeType(SkillLineEntry const* pSkill, bool racial);
 #define MAX_PET_NAME             12                         // max allowed by client name length
 #define MAX_CHARTER_NAME         24                         // max allowed by client name length
 
-bool normalizePlayerName(std::string& name);
+bool normalizePlayerName(std::string& name, size_t max_len = MAX_INTERNAL_PLAYER_NAME);
 
 struct LanguageDesc
 {
@@ -526,6 +527,8 @@ class ObjectMgr
 
 
         typedef std::unordered_map<uint32, PetCreateSpellEntry> PetCreateSpellMap;
+
+        std::unordered_map<uint32, std::vector<uint32>> const& GetCreatureSpawnEntry() const { return mCreatureSpawnEntryMap; }
 
         void LoadGameobjectInfo();
 
@@ -707,6 +710,7 @@ class ObjectMgr
         void LoadCreatureAddons();
         void LoadCreatureClassLvlStats();
         void LoadCreatureConditionalSpawn();
+        void LoadCreatureSpawnEntry();
         void LoadCreatureModelInfo();
         void LoadCreatureModelRace();
         void LoadEquipmentTemplates();
@@ -757,7 +761,9 @@ class ObjectMgr
 
         void LoadSpellTemplate();
         void CheckSpellCones();
+
         void LoadCreatureTemplateSpells();
+        void LoadCreatureCooldowns();
 
         void LoadGameTele();
 
@@ -1156,6 +1162,18 @@ class ObjectMgr
 
         QuestRelationsMap& GetCreatureQuestRelationsMap() { return m_CreatureQuestRelations; }
 
+        uint32 GetCreatureCooldown(uint32 entry, uint32 spellId)
+        {
+            auto itrEntry = m_creatureCooldownMap.find(entry);
+            if (itrEntry == m_creatureCooldownMap.end())
+                return 0;
+            auto& map = itrEntry->second;
+            auto itrSpell = map.find(spellId);
+            if (itrSpell == map.end())
+                return 0;
+            return urand(itrSpell->second.first, itrSpell->second.second);
+        }
+
         uint32 GetModelForRace(uint32 sourceModelId, uint32 racemask);
         /**
         * \brief: Data returned is used to compute health, mana, armor, damage of creatures. May be nullptr.
@@ -1222,6 +1240,9 @@ class ObjectMgr
 
         GossipMenusMap      m_mGossipMenusMap;
         GossipMenuItemsMap  m_mGossipMenuItemsMap;
+
+        std::unordered_map<uint32, std::vector<uint32>> mCreatureSpawnEntryMap;
+		
         PointOfInterestMap  mPointsOfInterest;
 
         PetCreateSpellMap   mPetCreateSpell;
@@ -1293,6 +1314,7 @@ class ObjectMgr
         ActiveCreatureGuidsOnMap m_activeCreatures;
         CreatureDataMap mCreatureDataMap;
         CreatureLocaleMap mCreatureLocaleMap;
+        std::unordered_map<uint32, std::unordered_map<uint32, std::pair<uint32, uint32>>> m_creatureCooldownMap;
         GameObjectDataMap mGameObjectDataMap;
         GameObjectLocaleMap mGameObjectLocaleMap;
         ItemLocaleMap mItemLocaleMap;

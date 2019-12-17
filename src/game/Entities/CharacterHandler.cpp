@@ -96,7 +96,7 @@ bool LoginQueryHolder::Initialize()
     if (sWorld.getConfig(CONFIG_BOOL_DECLINED_NAMES_USED))
         res &= SetPQuery(PLAYER_LOGIN_QUERY_LOADDECLINEDNAMES,   "SELECT genitive, dative, accusative, instrumental, prepositional FROM character_declinedname WHERE guid = '%u'", m_guid.GetCounter());
     // in other case still be dummy query
-    res &= SetPQuery(PLAYER_LOGIN_QUERY_LOADGUILD,           "SELECT guildid,rank FROM guild_member WHERE guid = '%u'", m_guid.GetCounter());
+    res &= SetPQuery(PLAYER_LOGIN_QUERY_LOADGUILD,           "SELECT guildid,`rank` FROM guild_member WHERE guid = '%u'", m_guid.GetCounter());
     res &= SetPQuery(PLAYER_LOGIN_QUERY_LOADARENAINFO,       "SELECT arenateamid, played_week, played_season, personal_rating FROM arena_team_member WHERE guid='%u'", m_guid.GetCounter());
     res &= SetPQuery(PLAYER_LOGIN_QUERY_LOADBGDATA,          "SELECT instance_id, team, join_x, join_y, join_z, join_o, join_map FROM character_battleground_data WHERE guid = '%u'", m_guid.GetCounter());
     res &= SetPQuery(PLAYER_LOGIN_QUERY_LOADSKILLS,          "SELECT skill, value, max FROM character_skills WHERE guid = '%u'", m_guid.GetCounter());
@@ -405,7 +405,7 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recv_data)
     SendPacket(data, true);
 
     const std::string& IP_str = GetRemoteAddress();
-    BASIC_LOG("Account: %d (IP: %s) Create Character:[%s] (guid: %u)", GetAccountId(), IP_str.c_str(), name.c_str(), pNewChar->GetGUIDLow());
+    DETAIL_LOG("Account: %d (IP: %s) Create Character:[%s] (guid: %u)", GetAccountId(), IP_str.c_str(), name.c_str(), pNewChar->GetGUIDLow());
     sLog.outChar("Account: %d (IP: %s) Create Character:[%s] (guid: %u)", GetAccountId(), IP_str.c_str(), name.c_str(), pNewChar->GetGUIDLow());
 
     // used by eluna
@@ -501,14 +501,6 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recv_data)
     {
         // player is reconnecting
 
-        if (!isLogingOut())
-        {
-            sLog.outError("HandlePlayerLoginOpcode> %s try to login again, AccountId = %u", pCurrChar->GetGuidStr().c_str(), GetAccountId());
-            data << (uint8)CHAR_LOGIN_FAILED;
-            SendPacket(data, true);
-            return;
-        }
-
         if (!pCurrChar)
         {
             sLog.outError("HandlePlayerLoginOpcode> %s try to login a second char, AccountId = %u", _player->GetGuidStr().c_str(), GetAccountId());
@@ -517,10 +509,22 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recv_data)
             return;
         }
 
+        if (!isLogingOut())
+        {
+            sLog.outError("HandlePlayerLoginOpcode> %s try to login again, AccountId = %u", pCurrChar->GetGuidStr().c_str(), GetAccountId());
+            data << (uint8)CHAR_LOGIN_FAILED;
+            SendPacket(data, true);
+            return;
+        }
+
         if (!_player->IsInWorld())
             // finish pending transfers before starting the logout
             while (_player && _player->IsBeingTeleportedFar())
                 HandleMoveWorldportAckOpcode();
+
+        // release loot on reconnect
+        if (Loot* loot = sLootMgr.GetLoot(_player))
+            loot->Release(_player);
 
         HandlePlayerReconnect();
         return;
@@ -588,6 +592,8 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder* holder)
         SendPacket(data, true);
         return;
     }
+
+    Group* group = pCurrChar->GetGroup();
 
     pCurrChar->SendDungeonDifficulty(false);
 
@@ -692,6 +698,10 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder* holder)
 
     sObjectAccessor.AddObject(pCurrChar);
     // DEBUG_LOG("Player %s added to Map.",pCurrChar->GetName());
+
+    if (group)
+        group->SendUpdateTo(pCurrChar);
+
     pCurrChar->GetSocial()->SendSocialList();
 
     pCurrChar->SendInitialPacketsAfterAddToMap();
@@ -707,11 +717,11 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder* holder)
 
     pCurrChar->SetInGameTime(WorldTimer::getMSTime());
 
-    // announce group about member online (must be after add to player list to receive announce to self)
-    if (Group* group = pCurrChar->GetGroup())
+    // Send group member online status for other members
+    if (group)
         group->UpdatePlayerOnlineStatus(pCurrChar);
 
-    // friend status
+    // Send friend list online status for other players
     sSocialMgr.SendFriendStatus(pCurrChar, FRIEND_ONLINE, pCurrChar->GetObjectGuid(), true);
 
     // Place character in world (and load zone) before some object loading
@@ -813,7 +823,10 @@ void WorldSession::HandlePlayerReconnect()
 
     SetOnline();
 
+    Group* group = _player->GetGroup();
+
     _player->SendDungeonDifficulty(false);
+
     WorldPacket data(SMSG_LOGIN_VERIFY_WORLD, 20);
     data << _player->GetMapId();
     data << _player->GetPositionX();
@@ -865,24 +878,23 @@ void WorldSession::HandlePlayerReconnect()
 
     _player->GetMap()->CreatePlayerOnClient(_player);
 
+    if (group)
+        group->SendUpdateTo(_player);
+
     _player->GetSocial()->SendSocialList();
     uint32 areaId = 0;
     uint32 zoneId = 0;
     _player->GetZoneAndAreaId(zoneId, areaId);
     _player->SendInitWorldStates(zoneId, areaId);
-    _player->ResetTimeSync();
-    _player->SendTimeSync();
+    _player->GetSession()->ResetTimeSync();
+    _player->GetSession()->SendTimeSync();
     _player->SendAllSpellMods(SPELLMOD_FLAT);
     _player->SendAllSpellMods(SPELLMOD_PCT);
     _player->CastSpell(_player, 836, TRIGGERED_OLD_TRIGGERED);       // LOGINEFFECT
     _player->SendEnchantmentDurations();                             // must be after add to map
     _player->SendItemDurations();                                    // must be after add to map
 
-    // announce group about member online (must be after add to player list to receive announce to self)
-    if (Group* group = _player->GetGroup())
-        group->UpdatePlayerOnlineStatus(_player);
-
-    // friend status
+    // Send friend list online status for other players
     sSocialMgr.SendFriendStatus(_player, FRIEND_ONLINE, _player->GetObjectGuid(), true);
 
     // show time before shutdown if shutdown planned.

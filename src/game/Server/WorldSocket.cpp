@@ -201,10 +201,12 @@ bool WorldSocket::ProcessIncomingData()
                 return HandlePing(*pct);
 
             case CMSG_KEEP_ALIVE:
-                DEBUG_LOG("CMSG_KEEP_ALIVE ,size: " SIZEFMTD " ", pct->size());
-				//sEluna->OnPacketReceive(m_session, *pct);
+                DEBUG_LOG("CMSG_KEEP_ALIVE, size: " SIZEFMTD " ", pct->size());
+                //sEluna->OnPacketReceive(m_session, *pct);
                 return true;
 
+            case CMSG_TIME_SYNC_RESP:
+                pct->SetReceivedTime(std::chrono::steady_clock::now());
             default:
             {
                 if (!m_session)
@@ -514,10 +516,7 @@ bool WorldSocket::HandlePing(WorldPacket& recvPacket)
     // critical section
     {
         if (m_session)
-        {
             m_session->SetLatency(latency);
-            m_session->ResetClientTimeDelay();
-        }
         else
         {
             sLog.outError("WorldSocket::HandlePing: peer sent CMSG_PING, "

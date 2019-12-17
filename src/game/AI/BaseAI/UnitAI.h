@@ -116,6 +116,7 @@ enum AIOrders
     ORDER_NONE,
     ORDER_DISTANCING,
     ORDER_FLEEING,
+    ORDER_RETREATING,
     ORDER_EVADE,
     ORDER_CUSTOM,
 };
@@ -166,7 +167,7 @@ class UnitAI
         /**
         * Called at reaching home after MoveTargetedHome
         */
-        virtual void SummonedJustReachedHome(Creature* summoned) {}
+        virtual void SummonedJustReachedHome(Creature* /*summoned*/) {}
 
         /**
          * Called at any Heal received from any Unit
@@ -180,8 +181,7 @@ class UnitAI
          * @param pDoneTo Unit* to whom Damage of amount uiDamage will be dealt
          * @param uiDamage Amount of Damage that will be dealt, can be changed here
          */
-        virtual void DamageDeal(Unit* doneTo, uint32& damage, DamageEffectType damageType, SpellEntry const* spellInfo) { DamageDeal(doneTo, damage, damageType); }
-        virtual void DamageDeal(Unit* /*doneTo*/, uint32& /*damage*/, DamageEffectType damageType) {}
+        virtual void DamageDeal(Unit* /*doneTo*/, uint32& /*damage*/, DamageEffectType /*damageType*/, SpellEntry const* /*spellInfo*/) {}
 
         /**
          * Called at any Damage from any attacker (before damage apply)
@@ -190,8 +190,7 @@ class UnitAI
          * @param pDealer Unit* who will deal Damage to the creature
          * @param uiDamage Amount of Damage that will be dealt, can be changed here
          */
-        virtual void DamageTaken(Unit* dealer, uint32& damage, DamageEffectType damageType, SpellEntry const* spellInfo) { DamageTaken(dealer, damage, damageType); }
-        virtual void DamageTaken(Unit* /*dealer*/, uint32& /*damage*/, DamageEffectType damageType) {}
+        virtual void DamageTaken(Unit* /*dealer*/, uint32& /*damage*/, DamageEffectType /*damageType*/, SpellEntry const* /*spellInfo*/) {}
 
         /**
          * Called when the creature is killed
@@ -253,7 +252,7 @@ class UnitAI
          * @param pTarget Target that we hit with the spell
          * @param pSpell Spell with which we hit pTarget
          */
-        virtual void SpellHitTarget(Unit* target, const SpellEntry* spellInfo, SpellMissInfo missInfo) { SpellHitTarget(target, spellInfo); }
+        virtual void SpellHitTarget(Unit* target, const SpellEntry* spellInfo, SpellMissInfo /*missInfo*/) { SpellHitTarget(target, spellInfo); }
         virtual void SpellHitTarget(Unit* /*target*/, const SpellEntry* /*spellInfo*/) {}
 
         /**
@@ -389,25 +388,28 @@ class UnitAI
         /*
          * Evaluates conditions and returns true if it is going to assist player
          */
-        virtual bool AssistPlayerInCombat(Unit* who) { return false; }
+        virtual bool AssistPlayerInCombat(Unit* /*who*/) { return false; }
 
         /*
          * Called when a spell is interrupted
          * @param spellInfo to specify which spell was interrupted
          */
-        virtual void OnSpellInterrupt(SpellEntry const* spellInfo) {}
+        virtual void OnSpellInterrupt(SpellEntry const* /*spellInfo*/) {}
 
         /*
          * Notifies AI on cast state change
          */
-        virtual void OnSpellCastStateChange(SpellEntry const* spellInfo, bool state, WorldObject* target = nullptr);
+        virtual void OnSpellCastStateChange(Spell const* spell, bool state, WorldObject* target = nullptr);
 
         /*
          * Notifies AI on channel state update
          */
-        virtual void OnChannelStateChange(SpellEntry const* spellInfo, bool state, WorldObject* target = nullptr);
+        virtual void OnChannelStateChange(Spell const* spell, bool state, WorldObject* target = nullptr);
 
-        virtual void TimedFleeingEnded();
+        /*
+         * Notifies AI on successfull spell execution
+         */
+        virtual void OnSpellCooldownAdded(SpellEntry const* /*spellInfo*/) {}
 
         void CheckForHelp(Unit* /*who*/, Unit* /*me*/, float /*dist*/);
         void DetectOrAttack(Unit* who);
@@ -436,20 +438,31 @@ class UnitAI
         void SetAIOrder(AIOrders order) { m_currentAIOrder = order; }
         AIOrders GetAIOrder() const { return m_currentAIOrder; }
 
-        void DoFlee();
+        bool DoFlee();
+        virtual bool DoRetreat() { return false; } // implemented for creatures
         void DoDistance(); // TODO
-        void DoCallForHelp(); // TODO
-        void DoSeekAssistance(); // TODO
+        virtual void DoCallForHelp(float radius) {} // implemented for creatures
+
+        // Drops all threat to 0%. Does not remove enemies from the threat list
+        void DoResetThreat();
 
         void SetMeleeEnabled(bool state);
 
         // Rough prototype, we might not need such fidelity
         virtual void JustRootedTarget(SpellEntry const* spellInfo, Unit* victim) { JustStoppedMovementOfTarget(spellInfo, victim); }
         virtual void JustStunnedTarget(SpellEntry const* spellInfo, Unit* victim) { JustStoppedMovementOfTarget(spellInfo, victim); }
-        virtual void JustStoppedMovementOfTarget(SpellEntry const* spellInfo, Unit* victim) {}
+        virtual void JustStoppedMovementOfTarget(SpellEntry const* /*spellInfo*/, Unit* /*victim*/) {}
 
         // AI selection - works in connection with IsPossessCharmType
         virtual bool CanHandleCharm() { return false; }
+
+        // Movement generator responses
+        virtual void TimedFleeingEnded();
+        virtual void RetreatingArrived() {}
+        virtual void RetreatingEnded() {}
+
+        virtual void DistancingStarted();
+        virtual void DistancingEnded();
 
     protected:
         virtual std::string GetAIName() { return "UnitAI"; }
